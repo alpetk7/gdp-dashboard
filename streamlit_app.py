@@ -46,7 +46,7 @@ def get_gdp_data():
     #
     # So let's pivot all those year-columns into two: Year and GDP
     gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
+        ['Country Name', 'Country Code'],
         [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
         'Year',
         'GDP',
@@ -54,8 +54,38 @@ def get_gdp_data():
 
     # Convert years from string to integers
     gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    gdp_df['GDP'] = pd.to_numeric(gdp_df['GDP'], errors='coerce')
 
     return gdp_df
+
+
+def calculate_annual_gdp_growth(gdp_data, start_year, end_year):
+    """Calculate nominal annual GDP growth only from adjacent, positive observations."""
+    growth_df = gdp_data[
+        ['Country Name', 'Country Code', 'Year', 'GDP']
+    ].copy().sort_values(['Country Code', 'Year'])
+    growth_df['GDP'] = pd.to_numeric(growth_df['GDP'], errors='coerce')
+
+    country_groups = growth_df.groupby('Country Code')
+    growth_df['Previous GDP'] = country_groups['GDP'].shift()
+    growth_df['Previous Year'] = country_groups['Year'].shift()
+
+    valid_observations = (
+        (growth_df['Year'] == growth_df['Previous Year'] + 1)
+        & (growth_df['GDP'] > 0)
+        & (growth_df['Previous GDP'] > 0)
+    )
+    growth_df = growth_df[
+        valid_observations
+        & (growth_df['Year'] >= start_year)
+        & (growth_df['Year'] <= end_year)
+    ].copy()
+    growth_df['Annual nominal GDP growth (%)'] = (
+        growth_df['GDP'] / growth_df['Previous GDP'] - 1
+    ) * 100
+
+    return growth_df
+
 
 gdp_df = get_gdp_data()
 
@@ -187,3 +217,99 @@ for i, country in enumerate(selected_countries):
             delta=growth,
             delta_color=delta_color
         )
+
+st.header('Growth and Economic Stability', divider='gray')
+
+st.info(
+    'The available indicator is GDP (current US$), which is nominal GDP. '
+    'It includes the effects of inflation and exchange-rate movements, so it '
+    'cannot be used to calculate real GDP growth. The results below are '
+    'explicitly labeled nominal GDP growth and should not be interpreted as '
+    'real economic growth.'
+)
+
+st.caption(
+    f'Growth rates are calculated for ending years {from_year}–{to_year} '
+    'against the immediately preceding calendar year. Missing values, zero '
+    'or negative GDP observations, and non-consecutive years are excluded. '
+    'Volatility is the population standard deviation of the available annual '
+    'rates; the observation count is shown in the summary.'
+)
+
+annual_growth_df = calculate_annual_gdp_growth(gdp_df, from_year, to_year)
+
+if annual_growth_df.empty:
+    st.warning(
+        'There are no valid consecutive, positive GDP observations for this '
+        'period. Choose a wider year range to see growth statistics.'
+    )
+else:
+    growth_summary = annual_growth_df.groupby(
+        ['Country Name', 'Country Code'], as_index=False
+    ).agg(
+        **{
+            'Mean annual nominal GDP growth (%)': (
+                'Annual nominal GDP growth (%)',
+                'mean',
+            ),
+            'Nominal GDP growth volatility (percentage points)': (
+                'Annual nominal GDP growth (%)',
+                lambda values: values.std(ddof=0),
+            ),
+            'Valid annual observations': (
+                'Annual nominal GDP growth (%)',
+                'count',
+            ),
+        }
+    ).sort_values('Country Name')
+
+    country_labels = dict(zip(
+        growth_summary['Country Code'],
+        growth_summary['Country Name'],
+    ))
+    selected_growth_country = st.selectbox(
+        'Country for annual growth details',
+        growth_summary['Country Code'].tolist(),
+        format_func=lambda code: f'{country_labels[code]} ({code})',
+    )
+
+    st.subheader('Nominal GDP growth: mean and volatility')
+    scatter_data = growth_summary.copy()
+    scatter_data['Selection'] = scatter_data['Country Code'].map(
+        lambda code: (
+            'Selected country'
+            if code == selected_growth_country
+            else 'Other countries'
+        )
+    )
+    st.scatter_chart(
+        scatter_data,
+        x='Nominal GDP growth volatility (percentage points)',
+        y='Mean annual nominal GDP growth (%)',
+        color='Selection',
+        x_label='Growth volatility (percentage points)',
+        y_label='Mean annual nominal GDP growth (%)',
+        alt=(
+            'Scatterplot of nominal GDP growth volatility against mean annual '
+            'nominal GDP growth, with the selected country highlighted.'
+        ),
+    )
+
+    st.subheader('Nominal GDP growth summary by country')
+    st.dataframe(
+        growth_summary,
+        hide_index=True,
+        width='stretch',
+    )
+
+    st.subheader(
+        f'Annual nominal GDP growth: {country_labels[selected_growth_country]}'
+    )
+    selected_annual_growth = annual_growth_df[
+        annual_growth_df['Country Code'] == selected_growth_country
+    ][['Year', 'Annual nominal GDP growth (%)']].sort_values('Year')
+    st.dataframe(
+        selected_annual_growth,
+        hide_index=True,
+        width='stretch',
+    )
