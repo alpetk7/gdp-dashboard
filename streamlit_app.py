@@ -119,6 +119,44 @@ st.line_chart(
 ''
 ''
 
+st.header('GDP growth comparison', divider='gray')
+
+country_options = list(countries)
+first_country_default = country_options.index('DEU') if 'DEU' in country_options else 0
+first_country = st.selectbox(
+    'First country',
+    country_options,
+    index=first_country_default,
+)
+
+second_country_options = [country for country in country_options if country != first_country]
+second_country_default = (
+    second_country_options.index('FRA') if 'FRA' in second_country_options else 0
+)
+second_country = st.selectbox(
+    'Second country',
+    second_country_options,
+    index=second_country_default,
+)
+
+comparison_gdp_df = gdp_df[
+    gdp_df['Country Code'].isin([first_country, second_country])
+].sort_values(['Country Code', 'Year']).copy()
+comparison_gdp_df['GDP Growth (%)'] = (
+    comparison_gdp_df.groupby('Country Code')['GDP'].pct_change(fill_method=None) * 100
+)
+comparison_gdp_df = comparison_gdp_df[
+    (comparison_gdp_df['Year'] >= from_year)
+    & (comparison_gdp_df['Year'] <= to_year)
+]
+
+st.line_chart(
+    comparison_gdp_df,
+    x='Year',
+    y='GDP Growth (%)',
+    color='Country Code',
+)
+
 
 first_year = gdp_df[gdp_df['Year'] == from_year]
 last_year = gdp_df[gdp_df['Year'] == to_year]
